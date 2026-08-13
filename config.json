@@ -2,9 +2,9 @@
   "source_file": "working.txt",
 
   "channels": [
-    { "username": "@YourChannelOne",   "daily_quota": 100 },
-    { "username": "@YourChannelTwo",   "daily_quota": 100 },
-    { "username": "@YourChannelThree", "daily_quota": 100 }
+    { "username": "@HyperConfigPro",   "daily_quota": 100 },
+    { "username": "@QuantumConfigX",   "daily_quota": 100 },
+    { "username": "@ApexConfigVpn", "daily_quota": 100 }
   ],
 
   "schedule": {
@@ -40,7 +40,14 @@
   "message": {
     "header": "🌐 <b>V2Ray Configs</b> — {date}\n📦 Batch {batch_index}/{batch_total} • {count} configs\n",
     "footer": "\n🔗 {channel}",
-    "extra_text": [],
+    "extra_text": [
+      "🚀 به جمع کاربران کانال ما بپیوندید!",
+      "هر روز جدیدترین کانفیگ‌های رایگان، پرسرعت و تست‌شده منتشر می‌شود.",
+      "💎 بدون هزینه",
+      "⚡️ سرعت بالا",
+      "🔄 بروزرسانی مداوم",
+      "📌 عضویت در کانال = دسترسی همیشگی به جدیدترین کانفیگ‌ها"
+    ],
     "code_block": true,
     "max_chars": 4000
   },
