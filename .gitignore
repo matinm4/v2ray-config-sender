@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Telethon session files — these are credentials. Only the StringSession in
+# GitHub Secrets should ever exist, never a *.session file in the repo.
+*.session
+*.session-journal
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Atomic-write leftovers from an interrupted run
+state/*.tmp
+
+# Editors / OS
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db

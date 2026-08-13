@@ -1,0 +1,52 @@
+{
+  "source_file": "working.txt",
+
+  "channels": [
+    { "username": "@YourChannelOne",   "daily_quota": 100 },
+    { "username": "@YourChannelTwo",   "daily_quota": 100 },
+    { "username": "@YourChannelThree", "daily_quota": 100 }
+  ],
+
+  "schedule": {
+    "window_hours": 24,
+    "batch_size": 10,
+    "grace_minutes": 10,
+    "max_messages_per_run": 6,
+    "inter_message_delay_seconds": 5,
+    "rebuild_when_exhausted": true
+  },
+
+  "distribution": {
+    "mode": "round_robin",
+    "shuffle": true,
+    "seed": null
+  },
+
+  "cleaning": {
+    "aggressive": false,
+    "replace_remark": true,
+    "remark_template": "{channel}",
+    "strip_ad_params": true,
+    "extra_ad_keywords": [],
+    "extra_ad_param_names": []
+  },
+
+  "cache": {
+    "file": "state/cache.json",
+    "ttl_days": 30,
+    "max_entries": 200000
+  },
+
+  "message": {
+    "header": "🌐 <b>V2Ray Configs</b> — {date}\n📦 Batch {batch_index}/{batch_total} • {count} configs\n",
+    "footer": "\n🔗 {channel}",
+    "code_block": true,
+    "max_chars": 4000
+  },
+
+  "runtime": {
+    "dry_run": false,
+    "log_level": "INFO",
+    "state_dir": "state"
+  }
+}

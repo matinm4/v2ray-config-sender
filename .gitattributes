@@ -1,0 +1,9 @@
+# Keep line endings LF in the repository. The workflow's shell steps run on
+# Ubuntu and break if CRLF ends up in the committed file.
+* text=auto eol=lf
+
+working.txt text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.md text eol=lf
