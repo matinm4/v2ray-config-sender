@@ -68,11 +68,52 @@ class Credentials:
             raise MissingCredentials(f"TELEGRAM_API_ID must be numeric: {exc}") from None
 
 
-def render(configs: list[str], channel: str, message_cfg: dict[str, Any], batch_index: int, batch_total: int) -> list[str]:
-    """Render a batch into one or more ready-to-send HTML messages."""
+class _SafeFields(dict):
+    """Leaves unknown ``{placeholders}`` as literal text instead of raising."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _fill(template: str, fields: dict[str, Any]) -> str:
+    """Substitute known placeholders; never fail on user-written text.
+
+    A free-text footer is written by hand in config.json, so it may well contain
+    a stray brace or a word in braces that is not a placeholder. That must not
+    take the run down.
+    """
+    try:
+        return str(template).format_map(_SafeFields(fields))
+    except (ValueError, IndexError):
+        LOG.warning("could not parse placeholders in %r — using it verbatim", template[:60])
+        return str(template)
+
+
+def _join_text(value: Any) -> str:
+    if isinstance(value, (list, tuple)):
+        return "\n".join(str(part) for part in value)
+    return "" if value is None else str(value)
+
+
+def render(
+    configs: list[str],
+    channel: str,
+    message_cfg: dict[str, Any],
+    batch_index: int,
+    batch_total: int,
+    extra_text: str | None = None,
+) -> list[str]:
+    """Render a batch into one or more ready-to-send HTML messages.
+
+    *extra_text* is optional free text appended at the very end of the post. Pass
+    ``""`` to suppress global text for a specific channel; pass ``None`` to fall
+    back to ``message.extra_text``.
+    """
     max_chars = min(int(message_cfg.get("max_chars", 4000)), TELEGRAM_HARD_LIMIT)
     use_code = bool(message_cfg.get("code_block", True))
     today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
+    raw_extra = extra_text if extra_text is not None else message_cfg.get("extra_text")
+    extra = _join_text(raw_extra)
 
     def wrap(chunk: list[str], part: int, parts: int) -> str:
         fields = {
@@ -84,26 +125,28 @@ def render(configs: list[str], channel: str, message_cfg: dict[str, Any], batch_
             "part": part,
             "part_total": parts,
         }
-        header = str(message_cfg.get("header") or "").format(**fields)
-        footer = str(message_cfg.get("footer") or "").format(**fields)
+        header = _fill(message_cfg.get("header") or "", fields)
+        footer = _fill(message_cfg.get("footer") or "", fields)
+        tail = _fill(extra, fields) if extra and part == parts else ""
         if parts > 1 and header:
             header = header.rstrip("\n") + f" (part {part}/{parts})\n"
         body = "\n".join(escape(c) for c in chunk)
         if use_code:
             body = f"<pre>{body}</pre>"
-        return f"{header}{body}{footer}"
+        return f"{header}{body}{footer}{tail}"
 
     single = wrap(configs, 1, 1)
     if len(single) <= max_chars:
         return [single]
 
-    # Split into as few chunks as possible while staying under the limit.
+    # Split into as few chunks as possible while staying under the limit. The
+    # probe uses part==parts so the optional tail is counted: the final chunk
+    # carries it, and a chunk sized without it could overflow once appended.
     chunks: list[list[str]] = []
     current: list[str] = []
-    # Reserve room for header/footer/markup; measured empirically per chunk below.
     for config in configs:
         candidate = current + [config]
-        if current and len(wrap(candidate, 1, 2)) > max_chars:
+        if current and len(wrap(candidate, 2, 2)) > max_chars:
             chunks.append(current)
             current = [config]
         else:

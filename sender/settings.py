@@ -47,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
     "message": {
         "header": "🌐 <b>V2Ray Configs</b> — {date}\n📦 Batch {batch_index}/{batch_total} • {count} configs\n",
         "footer": "\n🔗 {channel}",
+        "extra_text": "",
         "code_block": True,
         "max_chars": 4000,
     },
@@ -60,6 +61,7 @@ class Channel:
 
     username: str
     daily_quota: int
+    extra_text: str | None = None
 
     @property
     def key(self) -> str:
@@ -109,6 +111,16 @@ class Settings:
     @property
     def message(self) -> dict[str, Any]:
         return self.raw["message"]
+
+    def extra_text_for(self, channel: Channel) -> str:
+        """Optional free text appended to the end of a post.
+
+        A channel's own ``extra_text`` wins over the global ``message.extra_text``;
+        setting it to ``""`` on a channel silences the global text for that one.
+        """
+        if channel.extra_text is not None:
+            return channel.extra_text
+        return _join_text(self.message.get("extra_text"))
 
     @property
     def dry_run(self) -> bool:
@@ -179,11 +191,17 @@ def _parse_channels(raw_channels: Any, default_quota: int) -> list[Channel]:
     channels: list[Channel] = []
     seen: set[str] = set()
     for item in raw_channels or []:
+        extra: str | None = None
         if isinstance(item, str):
             username, quota = item.strip(), default_quota
         elif isinstance(item, dict):
             username = str(item.get("username") or item.get("name") or "").strip()
             quota = int(item.get("daily_quota", default_quota))
+            # Per-channel override for message.extra_text. An empty string is
+            # meaningful ("this channel gets no extra text"), so only a missing
+            # key falls back to the global setting.
+            if "extra_text" in item:
+                extra = _join_text(item["extra_text"])
         else:
             LOG.warning("skipping unrecognised channel entry: %r", item)
             continue
@@ -200,8 +218,19 @@ def _parse_channels(raw_channels: Any, default_quota: int) -> list[Channel]:
             LOG.warning("duplicate channel %s ignored", username)
             continue
         seen.add(key)
-        channels.append(Channel(username=username, daily_quota=quota))
+        channels.append(Channel(username=username, daily_quota=quota, extra_text=extra))
     return channels
+
+
+def _join_text(value: Any) -> str:
+    """Allow multi-line text to be written as a JSON list of lines.
+
+    JSON has no multi-line strings, so ``["line one", "line two"]`` is far easier
+    to read and edit in config.json than one string full of ``\\n``.
+    """
+    if isinstance(value, (list, tuple)):
+        return "\n".join(str(part) for part in value)
+    return "" if value is None else str(value)
 
 
 def load(config_path: str | Path = "config.json", root: str | Path | None = None) -> Settings:

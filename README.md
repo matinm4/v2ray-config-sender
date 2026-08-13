@@ -159,7 +159,11 @@ python tools/gen_session.py
   "source_file": "working.txt",
 
   "channels": [
-    { "username": "@YourChannelOne",   "daily_quota": 100 },
+    {
+      "username": "@YourChannelOne",
+      "daily_quota": 100,
+      "extra_text": ["🔴 عضو کانال ما شوید: @YourChannelOne", "🤝 پشتیبانی: @AdminOne"]
+    },
     { "username": "@YourChannelTwo",   "daily_quota": 100 },
     { "username": "@YourChannelThree", "daily_quota": 100 }
   ],
@@ -189,6 +193,7 @@ python tools/gen_session.py
   "message": {
     "header": "🌐 <b>V2Ray Configs</b> — {date}\n📦 Batch {batch_index}/{batch_total} • {count} configs\n",
     "footer": "\n🔗 {channel}",
+    "extra_text": ["📢 کانال اصلی: {channel}", "🚀 هر روز کانفیگ‌های تازه"],
     "code_block": true,
     "max_chars": 4000
   },
@@ -231,11 +236,42 @@ python tools/gen_session.py
 | کلید | معنا |
 |---|---|
 | `header` | متن بالای پیام. متغیرها: `{date}` `{channel}` `{count}` `{batch_index}` `{batch_total}` |
-| `footer` | متن پایین پیام. همان متغیرها. |
+| `footer` | متن پایانی پیش‌فرض (امضا). همان متغیرها. |
+| `extra_text` | متن اضافی دلخواه در انتهای پست (رشته یا لیست آرایه‌ای از خطوط). متغیرها پشتیبانی می‌شوند. |
 | `code_block` | `true` = همه‌ی کانفیگ‌ها داخل یک `<pre>` تا با یک تاچ کپی شوند. |
 | `max_chars` | سقف کاراکتر هر پیام. حد سخت تلگرام ۴۰۹۶ است؛ اگر دسته بزرگ‌تر شد، خودکار به چند پیام تقسیم می‌شود. |
 
-فرمت هدر و فوتر **HTML** است (`<b>`، `<i>`، `<code>`، `<a href>`). خود کانفیگ‌ها escape می‌شوند.
+فرمت هدر، فوتر و `extra_text` **HTML** است (`<b>`، `<i>`، `<code>`، `<a href>`). خود کانفیگ‌ها escape می‌شوند، ولی تگ‌های HTML شما سالم می‌مانند.
+
+### متن اضافی اختصاصی برای هر کانال
+
+می‌توانید `extra_text` را هم به‌صورت عمومی در `message` تعریف کنید و هم به‌صورت اختصاصی برای یک کانال در `channels`:
+
+```json
+"channels": [
+  {
+    "username": "@ChannelOne",
+    "daily_quota": 100,
+    "extra_text": ["📢 کانال اول", "💬 پشتیبانی: @AdminOne"]
+  },
+  {
+    "username": "@ChannelTwo",
+    "daily_quota": 100,
+    "extra_text": ""   // این کانال هیچ متن اضافی دریافت نمی‌کند (عمومی هم خاموش می‌شود)
+  },
+  {
+    "username": "@ChannelThree",
+    "daily_quota": 100
+    // از message.extra_text عمومی استفاده می‌کند
+  }
+]
+```
+
+نکات مهم `extra_text`:
+
+- می‌توانید آن را به‌صورت **یک لیست JSON** بنویسید (مانند بالا) تا نیازی به `\n` زشت در یک رشته‌ی بلند نباشد.
+- اگر دسته‌ای خیلی بزرگ باشد و به چند پیام تقسیم شود، `extra_text` **فقط در انتهای پیام آخر** می‌آید تا پست شکل جمع‌بندی داشته باشد و تکرار نشود.
+- اگر متغیری ناشناس در آن بنویسید (مثلاً `{custom_word}`)، اسکریپت **کرش نمی‌کند** و آن متن را عینا چاپ می‌کند.
 
 ### تغییر تنظیمات با متغیر محیطی
 

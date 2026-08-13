@@ -132,6 +132,8 @@ async def _run(args: argparse.Namespace) -> int:
     sent_configs = 0
     failures = 0
     lines: list[str] = []
+    # Channel objects carry the per-channel extra_text; the queue only knows names.
+    by_key = {c.key: c for c in cfg.channels}
 
     async with tg.Sender(creds, dry_run=cfg.dry_run) as sender:
         for plan, batch in due:
@@ -140,7 +142,11 @@ async def _run(args: argparse.Namespace) -> int:
             configs = [
                 _restamp(uri, plan.username, cfg.cleaning) for uri in batch.configs
             ]
-            messages = tg.render(configs, plan.username, cfg.message, batch.index, total_batches)
+            channel = by_key.get(plan.key)
+            extra = cfg.extra_text_for(channel) if channel else ""
+            messages = tg.render(
+                configs, plan.username, cfg.message, batch.index, total_batches, extra
+            )
 
             try:
                 first_id: int | None = None
@@ -226,6 +232,7 @@ def _preview(args: argparse.Namespace) -> int:
     cfg, cache = _load(args)
     now = time.time()
     queue = state.load_queue(cfg.queue_path) or planner.build_queue(cfg, cache, now=now)
+    by_key = {c.key: c for c in cfg.channels}
     shown = 0
     for plan in queue.channels:
         pending = plan.pending
@@ -233,7 +240,11 @@ def _preview(args: argparse.Namespace) -> int:
             continue
         batch = pending[0]
         configs = [_restamp(u, plan.username, cfg.cleaning) for u in batch.configs]
-        for text in tg.render(configs, plan.username, cfg.message, batch.index, len(plan.batches)):
+        channel = by_key.get(plan.key)
+        extra = cfg.extra_text_for(channel) if channel else ""
+        for text in tg.render(
+            configs, plan.username, cfg.message, batch.index, len(plan.batches), extra
+        ):
             print("=" * 72)
             print(f"# {plan.username} — batch {batch.index}, due {planner._ts(batch.due_at)}")
             print("=" * 72)

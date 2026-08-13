@@ -90,6 +90,73 @@ class TestRender(unittest.TestCase):
         self.assertIn("x" * 100, out[0])
 
 
+class TestExtraText(unittest.TestCase):
+    """The optional free text appended at the very end of a post."""
+
+    def test_extra_text_appended_last(self):
+        out = render(configs(3), "@Ch", MSG, 1, 1, "📣 هر روز کانفیگ تازه")
+        self.assertEqual(len(out), 1)
+        self.assertTrue(out[0].rstrip().endswith("📣 هر روز کانفیگ تازه"))
+        self.assertIn("</pre>", out[0])
+        # Order: body, then footer, then extra text.
+        self.assertLess(out[0].index("</pre>"), out[0].index("📣"))
+        self.assertLess(out[0].index("🔗 @Ch"), out[0].index("📣"))
+
+    def test_absent_by_default(self):
+        out = render(configs(3), "@Ch", MSG, 1, 1)
+        self.assertTrue(out[0].rstrip().endswith("@Ch"))
+
+    def test_empty_string_adds_nothing(self):
+        with_empty = render(configs(3), "@Ch", MSG, 1, 1, "")
+        without = render(configs(3), "@Ch", MSG, 1, 1)
+        self.assertEqual(with_empty, without)
+
+    def test_read_from_message_config(self):
+        cfg = dict(MSG, extra_text="powered by me")
+        out = render(configs(3), "@Ch", cfg, 1, 1)
+        self.assertIn("powered by me", out[0])
+
+    def test_argument_overrides_config(self):
+        cfg = dict(MSG, extra_text="global text")
+        out = render(configs(3), "@Ch", cfg, 1, 1, "per-channel text")
+        self.assertIn("per-channel text", out[0])
+        self.assertNotIn("global text", out[0])
+
+    def test_placeholders_are_filled(self):
+        out = render(configs(4), "@MyCh", MSG, 2, 5, "join {channel} — {count} configs on {date}")
+        self.assertIn("join @MyCh — 4 configs on", out[0])
+
+    def test_unknown_placeholder_does_not_crash(self):
+        out = render(configs(2), "@Ch", MSG, 1, 1, "price {price} toman {unclosed")
+        self.assertIn("{price}", out[0])
+        self.assertIn("{unclosed", out[0])
+
+    def test_html_in_extra_text_is_preserved(self):
+        # Unlike configs, the extra text is authored by the user, so its markup
+        # must reach Telegram intact.
+        out = render(configs(2), "@Ch", MSG, 1, 1, '<b>bold</b> <a href="https://t.me/x">link</a>')
+        self.assertIn("<b>bold</b>", out[0])
+        self.assertIn('<a href="https://t.me/x">link</a>', out[0])
+
+    def test_only_on_final_part_when_split(self):
+        out = render(configs(40, length=300), "@Ch", MSG, 1, 1, "CLOSING LINE")
+        self.assertGreater(len(out), 1)
+        for text in out[:-1]:
+            self.assertNotIn("CLOSING LINE", text)
+        self.assertIn("CLOSING LINE", out[-1])
+
+    def test_split_respects_limit_with_extra_text(self):
+        long_extra = "پیام تبلیغاتی بسیار طولانی " * 20
+        out = render(configs(40, length=300), "@Ch", MSG, 1, 1, long_extra)
+        for text in out:
+            self.assertLessEqual(len(text), MSG["max_chars"])
+
+    def test_multiline_extra_text(self):
+        extra = "line one\nline two\nline three"
+        out = render(configs(2), "@Ch", MSG, 1, 1, extra)
+        self.assertIn(extra, out[0])
+
+
 class TestCredentials(unittest.TestCase):
     def test_missing_env_raises(self):
         import os

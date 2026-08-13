@@ -440,5 +440,80 @@ class TestSettingsOverrides(unittest.TestCase):
             self.assertEqual(len(cfg.channels), 1)
 
 
+class TestExtraTextResolution(unittest.TestCase):
+    """Per-channel extra_text overriding the global message.extra_text."""
+
+    def _load(self, tmp: Path, payload: dict) -> Settings:
+        (tmp / "config.json").write_text(json.dumps(payload), encoding="utf-8")
+        return load(tmp / "config.json", root=tmp)
+
+    def test_global_applies_to_all_channels(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._load(tmp, {
+                "channels": [{"username": "@a", "daily_quota": 10},
+                             {"username": "@b", "daily_quota": 10}],
+                "message": {"extra_text": "global line"},
+            })
+            for channel in cfg.channels:
+                self.assertEqual(cfg.extra_text_for(channel), "global line")
+
+    def test_channel_value_wins(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._load(tmp, {
+                "channels": [{"username": "@a", "daily_quota": 10, "extra_text": "mine"},
+                             {"username": "@b", "daily_quota": 10}],
+                "message": {"extra_text": "global line"},
+            })
+            by_name = {c.username: c for c in cfg.channels}
+            self.assertEqual(cfg.extra_text_for(by_name["@a"]), "mine")
+            self.assertEqual(cfg.extra_text_for(by_name["@b"]), "global line")
+
+    def test_empty_string_silences_the_global_text(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._load(tmp, {
+                "channels": [{"username": "@a", "daily_quota": 10, "extra_text": ""}],
+                "message": {"extra_text": "global line"},
+            })
+            self.assertEqual(cfg.extra_text_for(cfg.channels[0]), "")
+
+    def test_list_of_lines_is_joined(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._load(tmp, {
+                "channels": [{"username": "@a", "daily_quota": 10}],
+                "message": {"extra_text": ["first", "second", "third"]},
+            })
+            self.assertEqual(cfg.extra_text_for(cfg.channels[0]), "first\nsecond\nthird")
+
+    def test_channel_list_of_lines(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._load(tmp, {
+                "channels": [{"username": "@a", "daily_quota": 10,
+                              "extra_text": ["one", "two"]}],
+            })
+            self.assertEqual(cfg.extra_text_for(cfg.channels[0]), "one\ntwo")
+
+    def test_absent_everywhere_is_empty(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cfg = self._load(tmp, {"channels": [{"username": "@a", "daily_quota": 10}]})
+            self.assertEqual(cfg.extra_text_for(cfg.channels[0]), "")
+
+    def test_env_override_of_global_text(self):
+        import os
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            os.environ["V2TG_MESSAGE__EXTRA_TEXT"] = "from env"
+            try:
+                cfg = self._load(tmp, {"channels": [{"username": "@a", "daily_quota": 10}]})
+                self.assertEqual(cfg.extra_text_for(cfg.channels[0]), "from env")
+            finally:
+                os.environ.pop("V2TG_MESSAGE__EXTRA_TEXT", None)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

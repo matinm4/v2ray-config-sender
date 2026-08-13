@@ -256,6 +256,76 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(sender.sent, [])
 
 
+class TestExtraTextEndToEnd(unittest.TestCase):
+    """The optional closing text, all the way through a real run."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmpdir.name)
+        write_source(self.tmp, 90)
+
+    def tearDown(self) -> None:
+        self._tmpdir.cleanup()
+
+    def _configure(self, message: dict, channels: list[dict] | None = None) -> None:
+        write_config(self.tmp)
+        cfg = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        cfg["message"] = message
+        if channels is not None:
+            cfg["channels"] = channels
+        (self.tmp / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    def test_global_extra_text_reaches_every_channel(self):
+        self._configure({"header": "", "footer": "\n{channel}",
+                         "extra_text": "📣 کانال ما را به دوستانتان معرفی کنید",
+                         "code_block": True, "max_chars": 4000})
+        sender = run_once(self.tmp)
+        self.assertEqual(len(sender.sent), 3)
+        for _channel, text in sender.sent:
+            self.assertTrue(text.rstrip().endswith("معرفی کنید"), text[-80:])
+
+    def test_per_channel_text_differs(self):
+        self._configure(
+            {"header": "", "footer": "", "extra_text": "GLOBAL",
+             "code_block": True, "max_chars": 4000},
+            channels=[
+                {"username": "@ChanOne", "daily_quota": 30, "extra_text": "ONE ONLY"},
+                {"username": "@ChanTwo", "daily_quota": 30, "extra_text": ""},
+                {"username": "@ChanThree", "daily_quota": 30},
+            ],
+        )
+        sender = run_once(self.tmp)
+        got = {channel: text for channel, text in sender.sent}
+        self.assertIn("ONE ONLY", got["@ChanOne"])
+        self.assertNotIn("GLOBAL", got["@ChanOne"])
+        self.assertNotIn("GLOBAL", got["@ChanTwo"])
+        self.assertNotIn("ONE ONLY", got["@ChanTwo"])
+        self.assertIn("GLOBAL", got["@ChanThree"])
+
+    def test_extra_text_as_list_of_lines(self):
+        self._configure({"header": "", "footer": "", "code_block": True, "max_chars": 4000,
+                         "extra_text": ["🔴 line one", "🟢 line two"]})
+        sender = run_once(self.tmp)
+        for _channel, text in sender.sent:
+            self.assertIn("🔴 line one\n🟢 line two", text)
+
+    def test_html_and_placeholders_in_extra_text(self):
+        self._configure({"header": "", "footer": "", "code_block": True, "max_chars": 4000,
+                         "extra_text": '<b>{channel}</b> — <a href="https://t.me/x">more</a>'})
+        sender = run_once(self.tmp)
+        for channel, text in sender.sent:
+            self.assertIn(f"<b>{channel}</b>", text)
+            self.assertIn('<a href="https://t.me/x">more</a>', text)
+
+    def test_configs_still_escaped_while_extra_text_is_not(self):
+        self._configure({"header": "", "footer": "", "code_block": True, "max_chars": 4000,
+                         "extra_text": "<i>promo</i>"})
+        sender = run_once(self.tmp)
+        for _channel, text in sender.sent:
+            self.assertIn("&amp;", text.split("</pre>")[0] + "&amp;")
+            self.assertIn("<i>promo</i>", text)
+
+
 class TestDryRun(unittest.TestCase):
     def test_dry_run_writes_no_cache(self):
         with tempfile.TemporaryDirectory() as td:
