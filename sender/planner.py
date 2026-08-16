@@ -180,12 +180,28 @@ def prepare(
     Cleaning happens with a neutral placeholder remark so the fingerprint is
     channel-independent; the real channel name is stamped in at send time.
     """
+    fresh, recycled, stats = _prepare_split(raw_lines, settings, cache)
+    return fresh, stats
+
+
+def _prepare_split(
+    raw_lines: Iterable[str],
+    settings: Settings,
+    cache: Cache,
+) -> tuple[list[Prepared], list[Prepared], dict[str, int]]:
+    """Clean every line and split it into never-sent and already-sent groups.
+
+    The second list is the recycling pool: valid configs that are still in the
+    source file but are already in the cache. It is only drawn from when the
+    fresh list cannot fill the channels' quotas.
+    """
     stats = {"input": 0, "invalid": 0, "oversized": 0, "cached": 0, "dup_in_batch": 0, "ready": 0}
     cfg = dict(settings.cleaning)
     # A single config longer than a whole message can never be delivered.
     size_limit = max(256, int(settings.message.get("max_chars", 4000)) - 200)
     seen: set[str] = set()
-    prepared: list[Prepared] = []
+    fresh: list[Prepared] = []
+    recycled: list[Prepared] = []
 
     for line in raw_lines:
         stats["input"] += 1
@@ -207,15 +223,18 @@ def prepare(
         if fp in seen:
             stats["dup_in_batch"] += 1
             continue
-        if cache.has(fp):
-            stats["cached"] += 1
-            continue
 
         seen.add(fp)
-        prepared.append(Prepared(uri=result.uri, fp=fp, endpoint=endpoint_key(result.uri) or ""))
+        item = Prepared(uri=result.uri, fp=fp, endpoint=endpoint_key(result.uri) or "")
+        if cache.has(fp):
+            stats["cached"] += 1
+            recycled.append(item)
+        else:
+            fresh.append(item)
 
-    stats["ready"] = len(prepared)
-    return prepared, stats
+    stats["ready"] = len(fresh)
+    stats["recyclable"] = len(recycled)
+    return fresh, recycled, stats
 
 
 # --------------------------------------------------------------------------- #
@@ -285,6 +304,65 @@ def distribute(
 
 
 # --------------------------------------------------------------------------- #
+# recycling: reuse old configs when no new ones arrive
+# --------------------------------------------------------------------------- #
+def _top_up_with_recycled(
+    fresh: list[Prepared],
+    recyclable: list[Prepared],
+    settings: Settings,
+    cache: Cache,
+    stats: dict[str, Any],
+) -> list[Prepared]:
+    """Pad *fresh* with already-sent configs so the channels never run dry.
+
+    Only the shortfall is filled, so a fresh config always wins over a repeat.
+    Oldest-sent first (then fewest repeats) means the rotation walks through the
+    whole pool in order rather than replaying the same handful.
+    """
+    cfg = settings.recycle
+    if not cfg.get("enabled", True) or not recyclable:
+        stats["recycled"] = 0
+        return fresh
+
+    target = settings.total_quota
+    shortfall = target - len(fresh)
+    if shortfall <= 0:
+        stats["recycled"] = 0
+        return fresh
+
+    max_times = int(cfg.get("max_times_each", 0))
+    cooldown = float(cfg.get("cooldown_hours", 0)) * 3600.0
+    now = time.time()
+
+    eligible = [
+        item
+        for item in recyclable
+        if (max_times <= 0 or cache.times_sent(item.fp) < max_times)
+        and (cooldown <= 0 or now - cache.last_sent(item.fp) >= cooldown)
+    ]
+    if not eligible:
+        LOG.info(
+            "recycling is on but no config qualifies yet "
+            "(cooldown_hours=%s, max_times_each=%s)",
+            cfg.get("cooldown_hours"), cfg.get("max_times_each"),
+        )
+        stats["recycled"] = 0
+        return fresh
+
+    # Least recently sent first; ties broken by how often it has already gone out.
+    eligible.sort(key=lambda item: (cache.last_sent(item.fp), cache.times_sent(item.fp)))
+    picked = eligible[:shortfall]
+
+    stats["recycled"] = len(picked)
+    LOG.info(
+        "only %d fresh config(s) for a quota of %d — recycling %d previously sent "
+        "config(s), oldest first",
+        len(fresh), target, len(picked),
+    )
+    return fresh + picked
+
+
+# --------------------------------------------------------------------------- #
 # time slotting
 # --------------------------------------------------------------------------- #
 def _slot_times(count: int, start: float, window_seconds: float) -> list[float]:
@@ -305,12 +383,14 @@ def build_queue(settings: Settings, cache: Cache, now: float | None = None) -> Q
     batch_size = int(sched["batch_size"])
 
     raw = load_source(settings)
-    prepared, stats = prepare(raw, settings, cache)
+    prepared, recyclable, stats = _prepare_split(raw, settings, cache)
     LOG.info(
-        "source: %d lines → %d ready (invalid=%d, oversized=%d, already sent=%d, dup=%d)",
+        "source: %d lines → %d fresh (invalid=%d, oversized=%d, already sent=%d, dup=%d)",
         stats["input"], stats["ready"], stats["invalid"], stats["oversized"],
         stats["cached"], stats["dup_in_batch"],
     )
+
+    prepared = _top_up_with_recycled(prepared, recyclable, settings, cache, stats)
 
     per_channel = distribute(prepared, settings.channels, settings)
 
@@ -346,7 +426,8 @@ def build_queue(settings: Settings, cache: Cache, now: float | None = None) -> Q
     )
     if queue.total_configs == 0:
         LOG.warning(
-            "nothing to schedule — every config in %s is either invalid or already sent",
+            "nothing to schedule — %s has no usable config, and recycling found "
+            "nothing to reuse",
             settings.source_path.name,
         )
     return queue
@@ -363,9 +444,11 @@ def _pretty_step(window_seconds: float, batches: int) -> str:
 def describe(queue: Queue, now: float | None = None) -> str:
     """Human-readable summary used in logs and the workflow summary."""
     now = time.time() if now is None else now
+    recycled = int(queue.stats.get("recycled", 0) or 0)
     lines = [
         f"window: {_ts(queue.window_start)} → {_ts(queue.window_end)}",
-        f"total configs: {queue.total_configs}, pending batches: {queue.pending_count}",
+        f"total configs: {queue.total_configs}, pending batches: {queue.pending_count}"
+        + (f" ({recycled} recycled)" if recycled else ""),
     ]
     for plan in queue.channels:
         pending = plan.pending

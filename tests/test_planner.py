@@ -440,6 +440,148 @@ class TestSettingsOverrides(unittest.TestCase):
             self.assertEqual(len(cfg.channels), 1)
 
 
+class TestRecycling(unittest.TestCase):
+    """Reusing already-sent configs once the source stops bringing new ones."""
+
+    def _settings(self, tmp: Path, quota: int = 20, **recycle) -> Settings:
+        return make_settings(
+            tmp,
+            channels=[{"username": "@a", "daily_quota": quota}],
+            schedule={"window_hours": 24, "batch_size": 5, "grace_minutes": 0,
+                      "max_messages_per_run": 6, "inter_message_delay_seconds": 0,
+                      "rebuild_when_exhausted": True},
+            distribution={"mode": "round_robin", "shuffle": False, "seed": 1},
+            recycle={"enabled": True, "cooldown_hours": 0, "max_times_each": 0, **recycle},
+        )
+
+    def _seed_cache(self, tmp: Path, items, ages: dict[str, float] | None = None) -> Cache:
+        """Mark *items* as already sent, optionally with a specific last-sent age."""
+        cache = Cache(tmp / "cache.json")
+        now = time.time()
+        for index, item in enumerate(items):
+            cache.add(item.fp, "@a")
+            if ages and item.fp in ages:
+                cache.entries[item.fp]["last"] = now - ages[item.fp]
+            else:
+                cache.entries[item.fp]["last"] = now - (len(items) - index) * 3600
+        return cache
+
+    def test_all_sent_source_still_fills_the_quota(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_source(tmp, 20)
+            cfg = self._settings(tmp)
+            items, _, _ = planner._prepare_split(planner.load_source(cfg), cfg, Cache(tmp / "c.json"))
+            cache = self._seed_cache(tmp, items)
+
+            queue = planner.build_queue(cfg, cache, now=1_700_000_000.0)
+            self.assertEqual(queue.total_configs, 20)
+            self.assertEqual(queue.stats["recycled"], 20)
+            self.assertEqual(queue.stats["ready"], 0)
+
+    def test_fresh_configs_are_preferred_and_only_the_gap_is_filled(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_source(tmp, 20)
+            cfg = self._settings(tmp)
+            items, _, _ = planner._prepare_split(planner.load_source(cfg), cfg, Cache(tmp / "c.json"))
+            # 15 of the 20 have already gone out; 5 are new.
+            cache = self._seed_cache(tmp, items[:15])
+
+            queue = planner.build_queue(cfg, cache, now=1_700_000_000.0)
+            self.assertEqual(queue.stats["ready"], 5)
+            self.assertEqual(queue.stats["recycled"], 15)
+            self.assertEqual(queue.total_configs, 20)
+
+    def test_no_recycling_when_fresh_meets_the_quota(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_source(tmp, 40)
+            cfg = self._settings(tmp, quota=20)
+            queue = planner.build_queue(cfg, Cache(tmp / "c.json"), now=1_700_000_000.0)
+            self.assertEqual(queue.stats["recycled"], 0)
+            self.assertEqual(queue.total_configs, 20)
+
+    def test_oldest_sent_comes_back_first(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_source(tmp, 10)
+            cfg = self._settings(tmp, quota=3)
+            items, _, _ = planner._prepare_split(planner.load_source(cfg), cfg, Cache(tmp / "c.json"))
+            # item[0] sent 100h ago, item[1] 90h ago, ... item[9] 10h ago.
+            ages = {item.fp: (10 - i) * 10 * 3600 for i, item in enumerate(items)}
+            cache = self._seed_cache(tmp, items, ages)
+
+            queue = planner.build_queue(cfg, cache, now=time.time())
+            scheduled = [c for b in queue.channels[0].batches for c in b.configs]
+            self.assertEqual(scheduled, [items[0].uri, items[1].uri, items[2].uri])
+
+    def test_disabled_means_no_recycling(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_source(tmp, 10)
+            cfg = self._settings(tmp, enabled=False)
+            items, _, _ = planner._prepare_split(planner.load_source(cfg), cfg, Cache(tmp / "c.json"))
+            cache = self._seed_cache(tmp, items)
+
+            queue = planner.build_queue(cfg, cache, now=1_700_000_000.0)
+            self.assertEqual(queue.total_configs, 0)
+            self.assertEqual(queue.stats["recycled"], 0)
+
+    def test_cooldown_blocks_recent_configs(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_source(tmp, 6)
+            cfg = self._settings(tmp, cooldown_hours=48)
+            items, _, _ = planner._prepare_split(planner.load_source(cfg), cfg, Cache(tmp / "c.json"))
+            # First three are old enough; the rest are inside the cooldown.
+            ages = {item.fp: (72 if i < 3 else 2) * 3600 for i, item in enumerate(items)}
+            cache = self._seed_cache(tmp, items, ages)
+
+            queue = planner.build_queue(cfg, cache, now=time.time())
+            self.assertEqual(queue.stats["recycled"], 3)
+
+    def test_max_times_each_caps_repeats(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            write_source(tmp, 5)
+            cfg = self._settings(tmp, max_times_each=2)
+            items, _, _ = planner._prepare_split(planner.load_source(cfg), cfg, Cache(tmp / "c.json"))
+            cache = self._seed_cache(tmp, items)
+            # Two of them have already been sent twice, so they are used up.
+            for item in items[:2]:
+                cache.entries[item.fp]["hits"] = 2
+
+            queue = planner.build_queue(cfg, cache, now=time.time())
+            self.assertEqual(queue.stats["recycled"], 3)
+
+    def test_hits_and_last_are_tracked_across_sends(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            cache = Cache(tmp / "cache.json")
+            cache.add("fp1", "@a")
+            first_seen = cache.entries["fp1"]["ts"]
+            self.assertEqual(cache.times_sent("fp1"), 1)
+
+            cache.entries["fp1"]["last"] = first_seen - 7200
+            cache.add("fp1", "@b")
+            self.assertEqual(cache.times_sent("fp1"), 2)
+            self.assertEqual(cache.entries["fp1"]["ts"], first_seen)
+            self.assertGreater(cache.last_sent("fp1"), first_seen - 7200)
+
+    def test_last_sent_defaults_for_legacy_entries(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            path = tmp / "cache.json"
+            path.write_text(json.dumps({
+                "version": 1, "entries": {"old": {"ts": time.time() - 3600}},
+            }), encoding="utf-8")
+            cache = Cache(path)
+            # No "last" field in the legacy file, so it falls back to "ts".
+            self.assertAlmostEqual(cache.last_sent("old"), cache.entries["old"]["ts"], places=3)
+            self.assertEqual(cache.last_sent("missing"), 0.0)
+
+
 class TestExtraTextResolution(unittest.TestCase):
     """Per-channel extra_text overriding the global message.extra_text."""
 

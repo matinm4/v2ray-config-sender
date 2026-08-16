@@ -35,6 +35,7 @@ DEFAULTS: dict[str, Any] = {
         "rebuild_when_exhausted": True,
     },
     "distribution": {"mode": "round_robin", "shuffle": True, "seed": None},
+    "recycle": {"enabled": True, "cooldown_hours": 0, "max_times_each": 0},
     "cleaning": {
         "aggressive": False,
         "replace_remark": True,
@@ -99,6 +100,11 @@ class Settings:
     @property
     def distribution(self) -> dict[str, Any]:
         return self.raw["distribution"]
+
+    @property
+    def recycle(self) -> dict[str, Any]:
+        """Settings for reusing old configs once the source has nothing new."""
+        return self.raw["recycle"]
 
     @property
     def cleaning(self) -> dict[str, Any]:

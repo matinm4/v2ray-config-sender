@@ -248,12 +248,31 @@ class TestEndToEnd(unittest.TestCase):
         self.assertEqual(len(queue.channels), 1)
         self.assertEqual(queue.channels[0].total_configs, 20)
 
-    def test_exhausted_source_sends_nothing_but_does_not_crash(self):
+    def test_exhausted_source_recycles_instead_of_going_silent(self):
         write_source(self.tmp, 5)
         write_config(self.tmp, batch_size=5)
-        run_once(self.tmp)  # sends the only 5
-        sender = run_once(self.tmp, rebuild=True)
-        self.assertEqual(sender.sent, [])
+        first = run_once(self.tmp)
+        # 5 configs shared across 3 channels, so every one goes out in this run.
+        self.assertEqual(len(first.configs_sent), 5)
+
+        # Nothing new in working.txt, so the same configs come round again
+        # rather than the channels falling silent.
+        second = run_once(self.tmp, rebuild=True)
+        self.assertEqual(len(second.configs_sent), 5)
+        cores_first = {c.split("#")[0] for c in first.configs_sent}
+        cores_second = {c.split("#")[0] for c in second.configs_sent}
+        self.assertEqual(cores_second, cores_first)
+
+    def test_recycling_can_be_switched_off(self):
+        write_source(self.tmp, 5)
+        write_config(self.tmp, batch_size=5)
+        cfg = json.loads((self.tmp / "config.json").read_text(encoding="utf-8"))
+        cfg["recycle"] = {"enabled": False}
+        (self.tmp / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+        run_once(self.tmp)
+        second = run_once(self.tmp, rebuild=True)
+        self.assertEqual(second.sent, [])
 
 
 class TestExtraTextEndToEnd(unittest.TestCase):

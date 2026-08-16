@@ -67,6 +67,7 @@ class Cache:
                 continue
             self.entries[str(key)] = {
                 "ts": first_seen,
+                "last": float(meta.get("last") or first_seen),
                 "channel": meta.get("channel", ""),
                 "hits": int(meta.get("hits", 1)),
             }
@@ -116,14 +117,28 @@ class Cache:
         return key in self.entries
 
     def add(self, key: str, channel: str = "") -> None:
-        """Record *key* as sent. Idempotent — the first timestamp is kept."""
+        """Record *key* as sent. ``ts`` keeps the first sighting, ``last`` the latest."""
+        now = time.time()
         existing = self.entries.get(key)
         if existing:
             existing["hits"] = int(existing.get("hits", 1)) + 1
+            existing["last"] = now
+            existing["channel"] = channel or existing.get("channel", "")
         else:
-            self.entries[key] = {"ts": time.time(), "channel": channel, "hits": 1}
+            self.entries[key] = {"ts": now, "last": now, "channel": channel, "hits": 1}
         self._dirty = True
 
     def add_many(self, keys: list[str], channel: str = "") -> None:
         for key in keys:
             self.add(key, channel)
+
+    def last_sent(self, key: str) -> float:
+        """When *key* last went out (0.0 if never). Used to order recycled configs."""
+        meta = self.entries.get(key)
+        if not meta:
+            return 0.0
+        return float(meta.get("last") or meta.get("ts") or 0.0)
+
+    def times_sent(self, key: str) -> int:
+        meta = self.entries.get(key)
+        return int(meta.get("hits", 1)) if meta else 0
